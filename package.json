@@ -1,0 +1,84 @@
+{
+  "name": "@mssfoobar/auth-sdk",
+  "version": "0.1.0",
+  "description": "Authentication and Authorization SDK for OIDC/Keycloak with SDS support",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./sveltekit": {
+      "import": {
+        "types": "./dist/sveltekit.d.ts",
+        "default": "./dist/sveltekit.js"
+      },
+      "require": {
+        "types": "./dist/sveltekit.d.cts",
+        "default": "./dist/sveltekit.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "auth",
+    "oidc",
+    "keycloak",
+    "sds",
+    "sveltekit",
+    "authentication",
+    "authorization"
+  ],
+  "author": "MSS Foobar",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mssfoobar/auth-sdk.git"
+  },
+  "devDependencies": {
+    "@sveltejs/kit": "^2.50.2",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vite-plugin-dts": "^4.3.0",
+    "vitest": "^2.1.0"
+  },
+  "dependencies": {
+    "jwt-decode": "^4.0.0",
+    "openid-client": "^6.1.3"
+  },
+  "peerDependencies": {
+    "@mssfoobar/sds-client": ">=0.0.5",
+    "@sveltejs/kit": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@mssfoobar/sds-client": {
+      "optional": true
+    },
+    "@sveltejs/kit": {
+      "optional": true
+    }
+  }
+}
