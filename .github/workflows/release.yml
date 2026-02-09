@@ -1,0 +1,21 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  release:
+    uses: mssfoobar/.github/.github/workflows/npm-changeset-release.yml@main
+    with:
+      node-version: "24"
+      scope: "@mssfoobar"
+      sync-branch: develop
+      legacy-peer-deps: true
+    secrets: inherit

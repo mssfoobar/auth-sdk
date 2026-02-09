@@ -57,6 +57,7 @@
     "url": "git+https://github.com/mssfoobar/auth-sdk.git"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.8",
     "@sveltejs/kit": "^2.50.2",
     "@types/node": "^24.10.12",
     "@vitest/coverage-v8": "^4.0.18",
