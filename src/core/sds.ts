@@ -108,7 +108,26 @@ export async function authenticateWithSds(
         authSessionId
       );
     } catch (err) {
-      logger.warn("Invalid SDS session", err);
+      // Distinguish not-found vs service unavailable
+      const error = err as Error & { code?: string; status?: number; statusCode?: number };
+      const status = error.status ?? error.statusCode;
+      const code = error.code;
+      
+      // Service unavailable: network/connection errors or 5xx status codes
+      const isUnavailable = code === "ECONNREFUSED" || 
+                            code === "ECONNRESET" || 
+                            code === "ETIMEDOUT" ||
+                            code === "ENOTFOUND" ||
+                            (typeof status === "number" && status >= 500);
+      
+      if (isUnavailable) {
+        // Don't destroy session — SDS might recover
+        logger.warn("SDS service unavailable, preserving session cookies", { message: error.message, code });
+        return { success: false } as AuthResultFail;
+      }
+      
+      // All other errors (including 404, 401, etc.) — session is invalid, clear it
+      logger.warn("SDS session invalid", { message: error.message, code, status });
       return handleSdsAuthFailure(cookies, cookieNames, cookieOptions);
     }
   }
@@ -158,7 +177,7 @@ async function handleSdsOidcCallback(
       SDS_SESSION_KEYS.CODE_VERIFIER
     );
   } catch (err) {
-    logger.warn("Failed to retrieve code verifier from SDS", err);
+    logger.warn("Failed to retrieve code verifier from SDS", { message: (err as Error)?.message, code: (err as any)?.code });
     return handleSdsAuthFailure(cookies, cookieNames, cookieOptions);
   }
   
@@ -188,7 +207,7 @@ async function handleSdsOidcCallback(
       throw new Error("Invalid client credentials");
     }
     
-    logger.error("SDS OIDC callback failed", err);
+    logger.error("SDS OIDC callback failed", { message: (err as Error)?.message, code: (err as any)?.code });
     return handleSdsAuthFailure(cookies, cookieNames, cookieOptions);
   }
 }
@@ -249,7 +268,7 @@ export async function storeCodeVerifierInSds(
     );
     cookies.set(cookieNames.tempSessionId, tempSessionId, cookieOptions);
   } catch (err) {
-    logger.error("Failed to store code verifier in SDS", err);
+    logger.error("Failed to store code verifier in SDS", { message: (err as Error)?.message, code: (err as any)?.code });
     throw err;
   }
 }
@@ -270,7 +289,7 @@ export async function destroySdsSession(
     try {
       await sdsClient.authSessionDestroy(authSessionId);
     } catch (err) {
-      logger.error("Failed to destroy SDS session", err);
+      logger.error("Failed to destroy SDS session", { message: (err as Error)?.message, code: (err as any)?.code });
     }
   }
   

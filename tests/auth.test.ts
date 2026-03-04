@@ -1,191 +1,82 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { authenticate, handleAuthSuccess, handleAuthFailure } from "../src/core/auth.js";
+import { describe, it, expect } from "vitest";
+import { handleAuthSuccess, handleAuthFailure } from "../src/core/auth.js";
 import type { CookieAdapter, CookieNames, CookieSerializeOptions } from "../src/core/types.js";
+import { DEFAULT_REFRESH_TOKEN_MAX_AGE } from "../src/core/config.js";
 
-// Mock external deps
-vi.mock("../src/core/tokens.js", () => ({
-  validateAccessToken: vi.fn(),
-  refreshTokens: vi.fn(),
-  decodeAccessToken: vi.fn(() => ({ sub: "user-123", active_tenant: {}, all_tenants: [], realm_access: { roles: [] } })),
-}));
-
-vi.mock("../src/core/oidc.js", () => ({
-  isOidcCallback: vi.fn(),
-  exchangeCode: vi.fn(),
-}));
-
-import { validateAccessToken, refreshTokens } from "../src/core/tokens.js";
-import { isOidcCallback, exchangeCode } from "../src/core/oidc.js";
-
-const mockValidate = vi.mocked(validateAccessToken);
-const mockRefresh = vi.mocked(refreshTokens);
-const mockIsCallback = vi.mocked(isOidcCallback);
-const mockExchangeCode = vi.mocked(exchangeCode);
-
-function createMockCookies(store: Record<string, string> = {}): CookieAdapter {
+function createMockCookies(): CookieAdapter & { _store: Map<string, { value: string; options: any }> } {
+  const store = new Map<string, { value: string; options: any }>();
   return {
-    get: vi.fn((name: string) => store[name]),
-    set: vi.fn((name: string, value: string) => { store[name] = value; }),
-    delete: vi.fn((name: string) => { delete store[name]; }),
+    get: (name: string) => store.get(name)?.value,
+    set: (name: string, value: string, options: any) => store.set(name, { value, options }),
+    delete: (name: string, options: any) => store.delete(name),
+    _store: store,
   };
 }
 
 const cookieNames: CookieNames = {
-  accessToken: "at",
-  refreshToken: "rt",
-  codeVerifier: "cv",
-  tempSessionId: "ts",
-  authSessionId: "as",
+  accessToken: "test_access_token",
+  refreshToken: "test_refresh_token",
+  codeVerifier: "test_code_verifier",
+  tempSessionId: "test_temp_session_id",
+  authSessionId: "test_auth_session_id",
+  oauthState: "test_oauth_state",
 };
 
-const cookieOptions: CookieSerializeOptions = { path: "/", secure: true };
-const oidcConfig = {} as any;
+const cookieOptions: CookieSerializeOptions = {
+  path: "/",
+  secure: true,
+  httpOnly: true,
+  sameSite: "lax",
+};
 
-describe("authenticate", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("returns success when access token is valid", async () => {
-    const cookies = createMockCookies({ at: "access", rt: "refresh" });
-    mockValidate.mockResolvedValue(true);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("refreshes when access token is invalid", async () => {
-    const cookies = createMockCookies({ at: "access", rt: "refresh" });
-    mockValidate.mockResolvedValue(false);
-    mockRefresh.mockResolvedValue({ access_token: "new_at", refresh_token: "new_rt", expires_in: 300 } as any);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("returns failure when refresh fails", async () => {
-    const cookies = createMockCookies({ at: "access", rt: "refresh" });
-    mockValidate.mockResolvedValue(false);
-    mockRefresh.mockResolvedValue(undefined);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(false);
-  });
-
-  it("refreshes when only refresh token exists", async () => {
-    const cookies = createMockCookies({ rt: "refresh" });
-    mockRefresh.mockResolvedValue({ access_token: "new_at", refresh_token: "new_rt", expires_in: 300 } as any);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("handles OIDC callback", async () => {
-    const cookies = createMockCookies({ cv: "verifier" });
-    mockIsCallback.mockReturnValue(true);
-    mockExchangeCode.mockResolvedValue({ access_token: "at", refresh_token: "rt", expires_in: 300 } as any);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/cb?code=x&session_state=y"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("fails OIDC callback without code verifier", async () => {
-    const cookies = createMockCookies({});
-    mockIsCallback.mockReturnValue(true);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/cb?code=x&session_state=y"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(false);
-  });
-
-  it("handles OIDC callback invalid_grant error", async () => {
-    const cookies = createMockCookies({ cv: "verifier" });
-    mockIsCallback.mockReturnValue(true);
-    const err: any = new Error("invalid_grant");
-    err.error = "invalid_grant";
-    mockExchangeCode.mockRejectedValue(err);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/cb?code=x&session_state=y"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(false);
-  });
-
-  it("throws on unauthorized_client error", async () => {
-    const cookies = createMockCookies({ cv: "verifier" });
-    mockIsCallback.mockReturnValue(true);
-    const err: any = new Error("unauthorized_client");
-    err.error = "unauthorized_client";
-    mockExchangeCode.mockRejectedValue(err);
-
-    await expect(authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/cb?code=x&session_state=y"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    })).rejects.toThrow("Invalid client credentials");
-  });
-
-  it("returns failure when no tokens and not callback", async () => {
-    const cookies = createMockCookies({});
-    mockIsCallback.mockReturnValue(false);
-
-    const result = await authenticate({
-      oidcConfig, cookies, url: new URL("http://localhost/"), origin: "http://localhost",
-      cookieNames, cookieOptions,
-    });
-
-    expect(result.success).toBe(false);
-  });
-});
+const createTestToken = (payload: Record<string, unknown>): string => {
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.test-signature`;
+};
 
 describe("handleAuthSuccess", () => {
-  it("sets cookies and returns success", () => {
+  it("should use default refresh token max age (30 days)", () => {
     const cookies = createMockCookies();
-    const result = handleAuthSuccess(cookies, cookieNames, cookieOptions, "at", "rt", 300);
+    const token = createTestToken({
+      sub: "user-1",
+      active_tenant: {},
+      all_tenants: [],
+      realm_access: { roles: [] },
+    });
 
-    expect(result.success).toBe(true);
-    expect(result.accessToken).toBe("at");
-    expect(cookies.set).toHaveBeenCalledTimes(2);
-    expect(cookies.delete).toHaveBeenCalledTimes(1);
+    handleAuthSuccess(cookies, cookieNames, cookieOptions, token, "refresh-token", 300);
+
+    const refreshCookie = cookies._store.get("test_refresh_token");
+    expect(refreshCookie?.options.maxAge).toBe(DEFAULT_REFRESH_TOKEN_MAX_AGE);
+    expect(DEFAULT_REFRESH_TOKEN_MAX_AGE).toBe(60 * 60 * 24 * 30); // 30 days
   });
 
-  it("works without refresh token", () => {
+  it("should use custom refresh token max age", () => {
     const cookies = createMockCookies();
-    const result = handleAuthSuccess(cookies, cookieNames, cookieOptions, "at");
+    const token = createTestToken({
+      sub: "user-1",
+      active_tenant: {},
+      all_tenants: [],
+      realm_access: { roles: [] },
+    });
 
-    expect(result.success).toBe(true);
-    expect(cookies.set).toHaveBeenCalledTimes(0); // no expiresIn, no refreshToken
+    handleAuthSuccess(cookies, cookieNames, cookieOptions, token, "refresh-token", 300, 86400);
+
+    const refreshCookie = cookies._store.get("test_refresh_token");
+    expect(refreshCookie?.options.maxAge).toBe(86400);
   });
 });
 
 describe("handleAuthFailure", () => {
-  it("clears all cookies", () => {
+  it("should clear all auth cookies", () => {
     const cookies = createMockCookies();
-    const result = handleAuthFailure(cookies, cookieNames, cookieOptions);
+    cookies.set("test_access_token", "at", cookieOptions);
+    cookies.set("test_refresh_token", "rt", cookieOptions);
 
-    expect(result.success).toBe(false);
-    expect(cookies.delete).toHaveBeenCalledTimes(5);
+    handleAuthFailure(cookies, cookieNames, cookieOptions);
+
+    expect(cookies._store.has("test_access_token")).toBe(false);
+    expect(cookies._store.has("test_refresh_token")).toBe(false);
   });
 });

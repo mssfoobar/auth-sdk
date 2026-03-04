@@ -24,7 +24,7 @@ const mockExchangeCode = vi.mocked(exchangeCode);
 
 const cookieNames: CookieNames = {
   accessToken: "at", refreshToken: "rt", codeVerifier: "cv",
-  tempSessionId: "ts", authSessionId: "as",
+  tempSessionId: "ts", authSessionId: "as", oauthState: "os",
 };
 const cookieOptions: CookieSerializeOptions = { path: "/" };
 
@@ -78,6 +78,41 @@ describe("authenticateWithSds", () => {
     });
 
     expect(result.success).toBe(false);
+    // Cookies should be cleared for non-connectivity errors
+    expect(cookies.get("as")).toBeUndefined();
+  });
+
+  it("preserves session cookies when SDS is unavailable (connectivity error)", async () => {
+    const cookies = createMockCookies({ as: "my-session" });
+    const connError = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const sds = createMockSdsClient({
+      authSessionGetAccessToken: vi.fn().mockRejectedValue(connError),
+    });
+
+    const result = await authenticateWithSds({
+      oidcConfig: {} as any, cookies, url: new URL("http://localhost/"),
+      origin: "http://localhost", sdsClient: sds, cookieNames, cookieOptions,
+    });
+
+    expect(result.success).toBe(false);
+    // Session cookie should NOT be cleared — SDS might recover
+    expect(cookies.get("as")).toBe("my-session");
+  });
+
+  it("preserves session cookies when SDS returns 5xx", async () => {
+    const cookies = createMockCookies({ as: "my-session" });
+    const serverError = Object.assign(new Error("Internal Server Error"), { status: 500 });
+    const sds = createMockSdsClient({
+      authSessionGetAccessToken: vi.fn().mockRejectedValue(serverError),
+    });
+
+    const result = await authenticateWithSds({
+      oidcConfig: {} as any, cookies, url: new URL("http://localhost/"),
+      origin: "http://localhost", sdsClient: sds, cookieNames, cookieOptions,
+    });
+
+    expect(result.success).toBe(false);
+    expect(cookies.get("as")).toBe("my-session");
   });
 
   it("handles OIDC callback with SDS", async () => {

@@ -22,6 +22,7 @@ export type {
 // Config utilities
 export {
   REFRESH_TOKEN_EXPIRY,
+  DEFAULT_REFRESH_TOKEN_MAX_AGE,
   CONTEXT_COOKIE_MAX_AGE,
   getCookieNames,
   buildCookieOptions,
