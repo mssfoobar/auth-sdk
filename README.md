@@ -255,6 +255,42 @@ Update hooks.server.ts to use `createAuthHooks()`.
 
 Update auth routes to use `createAuthRoutes()`.
 
+## Security
+
+### Rate Limiting
+
+The auth SDK does **not** include built-in rate limiting. It is strongly recommended that consumers add rate limiting middleware to the following auth endpoints to prevent brute-force and denial-of-service attacks:
+
+- **`/login`** — Limit login attempts per IP (e.g., 10 requests/minute)
+- **`/refresh`** — Limit token refresh requests (e.g., 30 requests/minute)
+- **`/logout`** — Limit logout requests (e.g., 10 requests/minute)
+
+Example with a SvelteKit rate limiter:
+
+```typescript
+// hooks.server.ts
+import { RateLimiter } from 'your-rate-limiter';
+
+const authLimiter = new RateLimiter({ windowMs: 60_000, max: 10 });
+
+export const handle = sequence(
+  async ({ event, resolve }) => {
+    if (event.url.pathname.startsWith('/aoh/api/auth/')) {
+      const ip = event.getClientAddress();
+      if (authLimiter.isLimited(ip)) {
+        return new Response('Too Many Requests', { status: 429 });
+      }
+    }
+    return resolve(event);
+  },
+  // ... your auth hooks
+);
+```
+
+### Cookie-based vs SDS Flow
+
+The cookie-based authentication flow stores raw JWTs in browser cookies and should only be used for development or when SDS is unavailable. For production deployments, use the SDS-backed flow (`authenticateWithSds`) which stores tokens server-side.
+
 ## License
 
 MIT

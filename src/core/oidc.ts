@@ -84,15 +84,22 @@ export function buildLoginUrl(
   config: Configuration,
   redirectUri: string,
   codeChallenge: string,
-  scope: string = "openid"
+  scope: string = "openid",
+  state?: string
 ): URL {
-  return buildAuthorizationUrl(config, {
+  const params: Record<string, string> = {
     scope,
     resource: redirectUri,
     redirect_uri: redirectUri,
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-  });
+  };
+  
+  if (state) {
+    params.state = state;
+  }
+  
+  return buildAuthorizationUrl(config, params);
 }
 
 /**
@@ -144,7 +151,5 @@ export async function exchangeCode(
  * @returns Whether URL is from OIDC issuer callback
  */
 export function isOidcCallback(url: URL): boolean {
-  return Boolean(
-    url.searchParams.has("session_state") && url.searchParams.has("code")
-  );
+  return url.searchParams.has("code");
 }

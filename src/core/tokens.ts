@@ -6,7 +6,26 @@ import {
   type TokenEndpointResponseHelpers,
 } from "openid-client";
 import { jwtDecode } from "jwt-decode";
+import * as jose from "jose";
 import type { AuthClaims, Logger } from "./types.js";
+
+/**
+ * Cached JWKS remote key set (per JWKS URI)
+ */
+const jwksCache = new Map<string, ReturnType<typeof jose.createRemoteJWKSet>>();
+
+/**
+ * Get or create a cached JWKS key set for the given issuer
+ */
+function getJwks(issuerUrl: string): ReturnType<typeof jose.createRemoteJWKSet> {
+  const jwksUri = issuerUrl.replace(/\/$/, "") + "/protocol/openid-connect/certs";
+  let jwks = jwksCache.get(jwksUri);
+  if (!jwks) {
+    jwks = jose.createRemoteJWKSet(new URL(jwksUri));
+    jwksCache.set(jwksUri, jwks);
+  }
+  return jwks;
+}
 
 /**
  * Default no-op logger
@@ -19,7 +38,8 @@ const noopLogger: Logger = {
 };
 
 /**
- * Validate an access token by calling the userinfo endpoint
+ * Validate an access token using offline JWKS-based verification.
+ * Falls back to the userinfo endpoint if local validation fails.
  * 
  * @param config - OIDC configuration
  * @param accessToken - Access token to validate
@@ -31,6 +51,31 @@ export async function validateAccessToken(
   accessToken: string,
   logger: Logger = noopLogger
 ): Promise<boolean> {
+  // Try offline (local) JWT validation first
+  try {
+    const decoded = jwtDecode(accessToken);
+    
+    if (!decoded.sub) {
+      throw new Error("No sub claim in access token");
+    }
+    
+    if (!decoded.iss) {
+      throw new Error("No iss claim in access token");
+    }
+    
+    const jwks = getJwks(decoded.iss);
+    await jose.jwtVerify(accessToken, jwks, {
+      issuer: decoded.iss,
+    });
+    
+    // Token is valid (signature verified, exp checked by jose)
+    logger.debug("Access token validated offline via JWKS");
+    return true;
+  } catch (error) {
+    logger.debug("Offline JWT validation failed, falling back to userinfo", { message: (error as Error)?.message });
+  }
+  
+  // Fallback: validate via userinfo endpoint
   try {
     const claims = jwtDecode(accessToken);
     
@@ -41,7 +86,7 @@ export async function validateAccessToken(
     await fetchUserInfo(config, accessToken, claims.sub);
     return true;
   } catch (error) {
-    logger.error("Invalid access token detected", error);
+    logger.error("Invalid access token detected", { message: (error as Error)?.message, code: (error as any)?.code });
     return false;
   }
 }
@@ -64,7 +109,7 @@ export async function refreshTokens(
   try {
     return await refreshTokenGrant(config, refreshToken);
   } catch (error) {
-    logger.error("Token refresh failed", error);
+    logger.error("Token refresh failed", { message: (error as Error)?.message, code: (error as any)?.code });
     return undefined;
   }
 }
@@ -94,7 +139,7 @@ export function isTenantAdmin(
     const claims = decodeAccessToken(accessToken);
     return claims.active_tenant?.roles?.includes("tenant-admin") ?? false;
   } catch (error) {
-    logger.error("Failed to decode access token", error);
+    logger.error("Failed to decode access token", { message: (error as Error)?.message, code: (error as any)?.code });
     return false;
   }
 }

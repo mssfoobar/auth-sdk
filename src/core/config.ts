@@ -1,9 +1,15 @@
 import type { CookieConfig, CookieNames, CookieSerializeOptions, AuthConfig } from "./types.js";
 
 /**
- * Default refresh token expiry (1 year in seconds)
+ * Default refresh token max age (30 days in seconds)
  */
-export const REFRESH_TOKEN_EXPIRY = 60 * 60 * 24 * 365; // 1 year
+export const DEFAULT_REFRESH_TOKEN_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+
+/**
+ * Refresh token expiry — defaults to DEFAULT_REFRESH_TOKEN_MAX_AGE.
+ * Use AuthConfig.refreshTokenMaxAge to override at runtime.
+ */
+export const REFRESH_TOKEN_EXPIRY = DEFAULT_REFRESH_TOKEN_MAX_AGE;
 
 /**
  * Default context cookie max age (7 days)

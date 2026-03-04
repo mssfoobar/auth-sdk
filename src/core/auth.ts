@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 import { validateAccessToken, refreshTokens, decodeAccessToken } from "./tokens.js";
 import { isOidcCallback, exchangeCode } from "./oidc.js";
-import { REFRESH_TOKEN_EXPIRY, withExpiry } from "./config.js";
+import { DEFAULT_REFRESH_TOKEN_MAX_AGE, withExpiry } from "./config.js";
 
 /**
  * Default no-op logger
@@ -40,12 +40,20 @@ export interface AuthenticateOptions {
   cookieOptions: CookieSerializeOptions;
   /** Optional logger */
   logger?: Logger;
+  /** Refresh token cookie max age in seconds (default: 30 days) */
+  refreshTokenMaxAge?: number;
+  /** Cookie name prefix (used for state cookie lookup) */
+  cookiePrefix?: string;
 }
 
 /**
- * Main authentication handler
+ * Main authentication handler (cookie-based flow).
  * 
- * Validates access token, refreshes if needed, handles OIDC callback
+ * Validates access token, refreshes if needed, handles OIDC callback.
+ * 
+ * **Note:** This cookie-based flow stores raw JWTs in browser cookies and should
+ * only be used when SDS is unavailable. For production deployments, prefer
+ * {@link authenticateWithSds} which stores tokens server-side in the Session Data Store.
  */
 export async function authenticate(
   options: AuthenticateOptions
@@ -58,6 +66,7 @@ export async function authenticate(
     cookieNames,
     cookieOptions,
     logger = noopLogger,
+    refreshTokenMaxAge = DEFAULT_REFRESH_TOKEN_MAX_AGE,
   } = options;
   
   const accessToken = cookies.get(cookieNames.accessToken);
@@ -69,7 +78,7 @@ export async function authenticate(
     const isValid = await validateAccessToken(oidcConfig, accessToken, logger);
     
     if (isValid) {
-      return handleAuthSuccess(cookies, cookieNames, cookieOptions, accessToken);
+      return handleAuthSuccess(cookies, cookieNames, cookieOptions, accessToken, undefined, undefined, refreshTokenMaxAge);
     }
     
     // Access token invalid, try refresh
@@ -79,7 +88,8 @@ export async function authenticate(
       cookies,
       cookieNames,
       cookieOptions,
-      logger
+      logger,
+      refreshTokenMaxAge
     );
   }
   
@@ -91,12 +101,26 @@ export async function authenticate(
       cookies,
       cookieNames,
       cookieOptions,
-      logger
+      logger,
+      refreshTokenMaxAge
     );
   }
   
   // Case 3: OIDC callback - exchange code for tokens
   if (isOidcCallback(url)) {
+    // Verify state parameter if present
+    const stateParam = url.searchParams.get("state");
+    const stateCookieName = options.cookiePrefix ? `${options.cookiePrefix}_oauth_state` : undefined;
+    const storedState = stateCookieName ? cookies.get(stateCookieName) : undefined;
+    
+    if (stateCookieName && storedState) {
+      if (stateParam !== storedState) {
+        logger.error("OAuth state mismatch — possible CSRF attack");
+        return handleAuthFailure(cookies, cookieNames, cookieOptions);
+      }
+      cookies.delete(stateCookieName, withExpiry(cookieOptions, 0));
+    }
+    
     return await handleOidcCallback(
       oidcConfig,
       url,
@@ -105,7 +129,8 @@ export async function authenticate(
       cookies,
       cookieNames,
       cookieOptions,
-      logger
+      logger,
+      refreshTokenMaxAge
     );
   }
   
@@ -122,7 +147,8 @@ async function doRefresh(
   cookies: CookieAdapter,
   cookieNames: CookieNames,
   cookieOptions: CookieSerializeOptions,
-  logger: Logger
+  logger: Logger,
+  refreshTokenMaxAge: number = DEFAULT_REFRESH_TOKEN_MAX_AGE
 ): Promise<AuthResult> {
   const newTokens = await refreshTokens(oidcConfig, refreshToken, logger);
   
@@ -134,7 +160,8 @@ async function doRefresh(
       cookieOptions,
       newTokens.access_token,
       newTokens.refresh_token,
-      newTokens.expires_in
+      newTokens.expires_in,
+      refreshTokenMaxAge
     );
   }
   
@@ -153,7 +180,8 @@ async function handleOidcCallback(
   cookies: CookieAdapter,
   cookieNames: CookieNames,
   cookieOptions: CookieSerializeOptions,
-  logger: Logger
+  logger: Logger,
+  refreshTokenMaxAge: number = DEFAULT_REFRESH_TOKEN_MAX_AGE
 ): Promise<AuthResult> {
   if (!codeVerifier) {
     logger.error("No code verifier found for OIDC callback");
@@ -171,7 +199,8 @@ async function handleOidcCallback(
       cookieOptions,
       tokenSet.access_token,
       tokenSet.refresh_token,
-      tokenSet.expires_in
+      tokenSet.expires_in,
+      refreshTokenMaxAge
     );
   } catch (err) {
     const error = err as ResponseBodyError;
@@ -182,13 +211,17 @@ async function handleOidcCallback(
       throw new Error("Invalid client credentials");
     }
     
-    logger.error("OIDC callback failed", err);
+    logger.error("OIDC callback failed", { message: (err as Error)?.message, code: (err as any)?.code });
     return handleAuthFailure(cookies, cookieNames, cookieOptions);
   }
 }
 
 /**
- * Set cookies and return success result
+ * Set cookies and return success result.
+ * 
+ * **Note:** In the cookie-based flow, this sets raw JWTs as browser cookies.
+ * The SDS-backed flow ({@link handleSdsAuthSuccess}) is recommended for production
+ * as it stores tokens server-side and only exposes a session ID to the browser.
  */
 export function handleAuthSuccess(
   cookies: CookieAdapter,
@@ -196,7 +229,8 @@ export function handleAuthSuccess(
   cookieOptions: CookieSerializeOptions,
   accessToken: string,
   refreshToken?: string,
-  expiresIn?: number
+  expiresIn?: number,
+  refreshTokenMaxAge: number = DEFAULT_REFRESH_TOKEN_MAX_AGE
 ): AuthResultSuccess {
   // Set access token cookie
   if (expiresIn) {
@@ -212,7 +246,7 @@ export function handleAuthSuccess(
     cookies.set(
       cookieNames.refreshToken,
       refreshToken,
-      withExpiry(cookieOptions, REFRESH_TOKEN_EXPIRY)
+      withExpiry(cookieOptions, refreshTokenMaxAge)
     );
   }
   
