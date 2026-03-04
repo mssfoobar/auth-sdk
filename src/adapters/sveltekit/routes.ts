@@ -8,7 +8,7 @@ import {
   getCookieNames,
   buildCookieOptions,
   withExpiry,
-  REFRESH_TOKEN_EXPIRY,
+  DEFAULT_REFRESH_TOKEN_MAX_AGE,
   type CookieConfig,
   type Logger,
   type SdsClient,
@@ -36,6 +36,8 @@ export interface AuthRoutesConfig {
   contextCookieName?: string;
   /** Context cookie max age in seconds (default: 7 days) */
   contextCookieMaxAge?: number;
+  /** Refresh token cookie max age in seconds (default: 30 days) */
+  refreshTokenMaxAge?: number;
 }
 
 /**
@@ -50,6 +52,7 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
   const callbackPath = config.callbackPath ?? "/aoh/api/auth/callback";
   const contextCookieName = config.contextCookieName ?? "context_value";
   const contextCookieMaxAge = config.contextCookieMaxAge ?? 60 * 60 * 24 * 7;
+  const refreshTokenMaxAge = config.refreshTokenMaxAge ?? DEFAULT_REFRESH_TOKEN_MAX_AGE;
   
   return {
     /**
@@ -64,21 +67,24 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
       const codeVerifier = pkce.generateVerifier();
       const codeChallenge = await pkce.calculateChallenge(codeVerifier);
       const redirectUri = config.origin + callbackPath;
+      const state = crypto.randomUUID();
       
-      const authUrl = buildLoginUrl(oidcConfig, redirectUri, codeChallenge);
+      const authUrl = buildLoginUrl(oidcConfig, redirectUri, codeChallenge, "openid", state);
       
-      // Store code verifier
+      // Store code verifier and state
       if (config.createSdsClient) {
         const sdsClient = await config.createSdsClient();
         try {
           const tempSessionId = await sdsClient.tempSessionNew();
           await sdsClient.tempSessionSet(tempSessionId, "code_verifier", codeVerifier);
+          await sdsClient.tempSessionSet(tempSessionId, "state", state);
           cookies.set(cookieNames.tempSessionId, tempSessionId, cookieOptions);
         } finally {
           await sdsClient.close();
         }
       } else {
         cookies.set(cookieNames.codeVerifier, codeVerifier, cookieOptions);
+        cookies.set(cookieNames.oauthState, state, cookieOptions);
       }
       
       return json(null, {
@@ -104,7 +110,7 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
           try {
             await sdsClient.authSessionDestroy(authSessionId);
           } catch (err) {
-            logger.error("Failed to destroy SDS session", err);
+            logger.error("Failed to destroy SDS session", { message: (err as Error)?.message, code: (err as any)?.code });
           } finally {
             await sdsClient.close();
           }
@@ -132,7 +138,7 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
               return json(null, { status: 307 });
             }
           } catch (err) {
-            logger.error("Error refreshing tokens during logout", err);
+            logger.error("Error refreshing tokens during logout", { message: (err as Error)?.message, code: (err as any)?.code });
           }
         }
       }
@@ -149,7 +155,10 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
       
       if (redirectDestination) {
         cookies.delete("aoh_redirect_after_auth", { path: "/" });
-        redirect(307, redirectDestination);
+        // Only allow relative URLs to prevent open redirect attacks
+        if (redirectDestination.startsWith('/') && !redirectDestination.startsWith('//')) {
+          redirect(307, redirectDestination);
+        }
       }
       
       const defaultDestination = ("/" + loginDestination).replace("//", "/");
@@ -169,7 +178,7 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
             await sdsClient.authSessionGetAccessToken(authSessionId);
             return json(null, { status: 200 });
           } catch (err) {
-            logger.error("SDS token refresh failed", err);
+            logger.error("SDS token refresh failed", { message: (err as Error)?.message, code: (err as any)?.code });
             cookies.delete(cookieNames.authSessionId, withExpiry(cookieOptions, 0));
           } finally {
             await sdsClient.close();
@@ -190,12 +199,12 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
             cookies.set(
               cookieNames.refreshToken,
               tokens.refresh_token!,
-              withExpiry(cookieOptions, REFRESH_TOKEN_EXPIRY)
+              withExpiry(cookieOptions, refreshTokenMaxAge)
             );
             cookies.delete(cookieNames.codeVerifier, withExpiry(cookieOptions, 0));
             return json(null, { status: 200 });
           } catch (err) {
-            logger.error("Token refresh failed", err);
+            logger.error("Token refresh failed", { message: (err as Error)?.message, code: (err as any)?.code });
             cookies.delete(cookieNames.accessToken, withExpiry(cookieOptions, 0));
             cookies.delete(cookieNames.refreshToken, withExpiry(cookieOptions, 0));
           }
@@ -220,9 +229,21 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
      * Set context handler - set context value
      */
     setContext: async ({ cookies, setHeaders, params }: { cookies: any; setHeaders: any; params: { value: string } }) => {
+      // Validate context value
+      const value = params.value;
+      if (!value || value.length === 0) {
+        return json({ error: "Context value must be non-empty" }, { status: 400 });
+      }
+      if (value.length > 128) {
+        return json({ error: "Context value must not exceed 128 characters" }, { status: 400 });
+      }
+      if (!/^[a-zA-Z0-9\-_]+$/.test(value)) {
+        return json({ error: "Context value contains invalid characters (only alphanumeric, hyphens, underscores allowed)" }, { status: 400 });
+      }
+      
       cookies.set(
         contextCookieName,
-        params.value,
+        value,
         withExpiry(cookieOptions, contextCookieMaxAge)
       );
       setHeaders({ Location: config.origin });

@@ -11,6 +11,8 @@ export default defineConfig({
         "dist/**",
         "**/*.config.*",
         "**/*.d.ts",
+        "src/index.ts",
+        "src/adapters/sveltekit/index.ts",
       ],
       thresholds: {
         lines: 80,

@@ -53,6 +53,8 @@ export interface AuthConfig {
   allowInsecureRequests?: boolean;
   /** Session Data Store URL (optional) */
   sdsUrl?: string;
+  /** Refresh token cookie max age in seconds (default: 30 days) */
+  refreshTokenMaxAge?: number;
 }
 
 /**
@@ -82,6 +84,7 @@ export interface CookieNames {
   codeVerifier: string;
   tempSessionId: string;
   authSessionId: string;
+  oauthState: string;
 }
 
 /**
