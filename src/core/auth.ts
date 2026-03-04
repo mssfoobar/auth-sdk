@@ -42,8 +42,6 @@ export interface AuthenticateOptions {
   logger?: Logger;
   /** Refresh token cookie max age in seconds (default: 30 days) */
   refreshTokenMaxAge?: number;
-  /** Cookie name prefix (used for state cookie lookup) */
-  cookiePrefix?: string;
 }
 
 /**
@@ -108,17 +106,19 @@ export async function authenticate(
   
   // Case 3: OIDC callback - exchange code for tokens
   if (isOidcCallback(url)) {
-    // Verify state parameter if present
+    // Verify state parameter (CSRF protection)
     const stateParam = url.searchParams.get("state");
-    const stateCookieName = options.cookiePrefix ? `${options.cookiePrefix}_oauth_state` : undefined;
-    const storedState = stateCookieName ? cookies.get(stateCookieName) : undefined;
+    const storedState = cookies.get(cookieNames.oauthState);
     
-    if (stateCookieName && storedState) {
+    if (storedState) {
       if (stateParam !== storedState) {
         logger.error("OAuth state mismatch — possible CSRF attack");
         return handleAuthFailure(cookies, cookieNames, cookieOptions);
       }
-      cookies.delete(stateCookieName, withExpiry(cookieOptions, 0));
+      cookies.delete(cookieNames.oauthState, withExpiry(cookieOptions, 0));
+    } else if (stateParam) {
+      // State was sent but no stored state found — cookie may have expired
+      logger.warn("OAuth state parameter present but no stored state cookie found");
     }
     
     return await handleOidcCallback(

@@ -15,10 +15,14 @@ import type { AuthClaims, Logger } from "./types.js";
 const jwksCache = new Map<string, ReturnType<typeof jose.createRemoteJWKSet>>();
 
 /**
- * Get or create a cached JWKS key set for the given issuer
+ * Get or create a cached JWKS key set from the OIDC configuration's jwks_uri.
+ * Uses the discovery metadata rather than hardcoding provider-specific paths.
  */
-function getJwks(issuerUrl: string): ReturnType<typeof jose.createRemoteJWKSet> {
-  const jwksUri = issuerUrl.replace(/\/$/, "") + "/protocol/openid-connect/certs";
+function getJwksFromConfig(config: Configuration): ReturnType<typeof jose.createRemoteJWKSet> | undefined {
+  const metadata = config.serverMetadata();
+  const jwksUri = metadata.jwks_uri;
+  if (!jwksUri) return undefined;
+  
   let jwks = jwksCache.get(jwksUri);
   if (!jwks) {
     jwks = jose.createRemoteJWKSet(new URL(jwksUri));
@@ -51,22 +55,21 @@ export async function validateAccessToken(
   accessToken: string,
   logger: Logger = noopLogger
 ): Promise<boolean> {
-  // Try offline (local) JWT validation first
+  // Try offline (local) JWT validation first via JWKS from discovery metadata
   try {
-    const decoded = jwtDecode(accessToken);
+    const jwks = getJwksFromConfig(config);
+    if (!jwks) {
+      throw new Error("No jwks_uri in OIDC server metadata");
+    }
     
-    if (!decoded.sub) {
+    const metadata = config.serverMetadata();
+    const { payload } = await jose.jwtVerify(accessToken, jwks, {
+      issuer: metadata.issuer,
+    });
+    
+    if (!payload.sub) {
       throw new Error("No sub claim in access token");
     }
-    
-    if (!decoded.iss) {
-      throw new Error("No iss claim in access token");
-    }
-    
-    const jwks = getJwks(decoded.iss);
-    await jose.jwtVerify(accessToken, jwks, {
-      issuer: decoded.iss,
-    });
     
     // Token is valid (signature verified, exp checked by jose)
     logger.debug("Access token validated offline via JWKS");

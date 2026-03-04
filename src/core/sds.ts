@@ -108,20 +108,27 @@ export async function authenticateWithSds(
         authSessionId
       );
     } catch (err) {
-      // Fix #9: Distinguish not-found vs unavailable
-      const error = err as Error & { code?: string; status?: number };
-      const isNotFound = error.message?.includes("not found") || 
-                         error.message?.includes("Not Found") ||
-                         (error as any).status === 404;
+      // Distinguish not-found vs service unavailable
+      const error = err as Error & { code?: string; status?: number; statusCode?: number };
+      const status = error.status ?? error.statusCode;
+      const code = error.code;
       
-      if (isNotFound) {
-        logger.warn("SDS session not found", { message: error.message, code: (error as any)?.code });
-        return handleSdsAuthFailure(cookies, cookieNames, cookieOptions);
+      // Service unavailable: network/connection errors or 5xx status codes
+      const isUnavailable = code === "ECONNREFUSED" || 
+                            code === "ECONNRESET" || 
+                            code === "ETIMEDOUT" ||
+                            code === "ENOTFOUND" ||
+                            (typeof status === "number" && status >= 500);
+      
+      if (isUnavailable) {
+        // Don't destroy session — SDS might recover
+        logger.warn("SDS service unavailable, preserving session cookies", { message: error.message, code });
+        return { success: false } as AuthResultFail;
       }
       
-      // Service unavailable — don't destroy session, return unauthenticated
-      logger.warn("SDS service unavailable, preserving session cookies", { message: error.message, code: (error as any)?.code });
-      return { success: false } as AuthResultFail;
+      // All other errors (including 404, 401, etc.) — session is invalid, clear it
+      logger.warn("SDS session invalid", { message: error.message, code, status });
+      return handleSdsAuthFailure(cookies, cookieNames, cookieOptions);
     }
   }
   

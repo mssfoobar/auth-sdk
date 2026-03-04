@@ -19,6 +19,7 @@ const cookieNames: CookieNames = {
   codeVerifier: "test_code_verifier",
   tempSessionId: "test_temp_session_id",
   authSessionId: "test_auth_session_id",
+  oauthState: "test_oauth_state",
 };
 
 const cookieOptions: CookieSerializeOptions = {

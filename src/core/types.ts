@@ -84,6 +84,7 @@ export interface CookieNames {
   codeVerifier: string;
   tempSessionId: string;
   authSessionId: string;
+  oauthState: string;
 }
 
 /**

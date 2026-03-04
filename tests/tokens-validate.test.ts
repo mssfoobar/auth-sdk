@@ -24,7 +24,15 @@ vi.mock("openid-client", () => ({
 import * as jose from "jose";
 import { fetchUserInfo } from "openid-client";
 
-const mockConfig = {} as Configuration;
+// Mock config with serverMetadata that returns jwks_uri and issuer
+function createMockConfig(jwksUri?: string, issuer?: string): Configuration {
+  return {
+    serverMetadata: () => ({
+      issuer: issuer ?? "https://keycloak.example.com/realms/test",
+      jwks_uri: jwksUri ?? "https://keycloak.example.com/realms/test/protocol/openid-connect/certs",
+    }),
+  } as unknown as Configuration;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -35,7 +43,7 @@ describe("validateAccessToken", () => {
     (jose.jwtVerify as any).mockResolvedValue({ payload: { sub: "user-1" } });
 
     const token = createTestJwt({ sub: "user-1", iss: "https://keycloak.example.com/realms/test" });
-    const result = await validateAccessToken(mockConfig, token);
+    const result = await validateAccessToken(createMockConfig(), token);
 
     expect(result).toBe(true);
     expect(jose.jwtVerify).toHaveBeenCalled();
@@ -47,7 +55,7 @@ describe("validateAccessToken", () => {
     (fetchUserInfo as any).mockResolvedValue({ sub: "user-1" });
 
     const token = createTestJwt({ sub: "user-1", iss: "https://keycloak.example.com/realms/test" });
-    const result = await validateAccessToken(mockConfig, token);
+    const result = await validateAccessToken(createMockConfig(), token);
 
     expect(result).toBe(true);
     expect(jose.jwtVerify).toHaveBeenCalled();
@@ -59,41 +67,60 @@ describe("validateAccessToken", () => {
     (fetchUserInfo as any).mockRejectedValue(new Error("unauthorized"));
 
     const token = createTestJwt({ sub: "user-1", iss: "https://keycloak.example.com/realms/test" });
-    const result = await validateAccessToken(mockConfig, token);
+    const result = await validateAccessToken(createMockConfig(), token);
 
     expect(result).toBe(false);
   });
 
-  it("should return false when token has no sub claim", async () => {
-    const token = createTestJwt({ iss: "https://keycloak.example.com/realms/test" });
-    const result = await validateAccessToken(mockConfig, token);
+  it("should fall back to userinfo when no jwks_uri in metadata", async () => {
+    (fetchUserInfo as any).mockResolvedValue({ sub: "user-1" });
 
-    expect(result).toBe(false);
-  });
+    const configNoJwks = createMockConfig(undefined);
+    (configNoJwks.serverMetadata as any) = () => ({ issuer: "https://keycloak.example.com", jwks_uri: undefined });
 
-  it("should return false when token has no iss claim", async () => {
     const token = createTestJwt({ sub: "user-1" });
-    // No iss → offline validation fails, falls back to userinfo
+    const result = await validateAccessToken(configNoJwks, token);
+
+    expect(result).toBe(true);
+    expect(fetchUserInfo).toHaveBeenCalled();
+  });
+
+  it("should return false when token has no sub claim (userinfo fallback)", async () => {
+    (jose.jwtVerify as any).mockRejectedValue(new Error("bad"));
     (fetchUserInfo as any).mockRejectedValue(new Error("bad token"));
-    
-    const result = await validateAccessToken(mockConfig, token);
+
+    const token = createTestJwt({ iss: "https://keycloak.example.com/realms/test" });
+    const result = await validateAccessToken(createMockConfig(), token);
+
     expect(result).toBe(false);
   });
 
-  it("should cache JWKS per issuer URL (reuses same key set)", async () => {
+  it("should verify with issuer from server metadata", async () => {
     (jose.jwtVerify as any).mockResolvedValue({ payload: { sub: "user-1" } });
 
-    // Use a unique issuer to avoid cross-test cache hits
-    const uniqueIssuer = "https://keycloak.example.com/realms/cache-test-" + Date.now();
-    const token1 = createTestJwt({ sub: "user-1", iss: uniqueIssuer });
-    const token2 = createTestJwt({ sub: "user-2", iss: uniqueIssuer });
+    const token = createTestJwt({ sub: "user-1" });
+    await validateAccessToken(createMockConfig(undefined, "https://my-issuer.com"), token);
+
+    expect(jose.jwtVerify).toHaveBeenCalledWith(
+      token,
+      expect.any(Function),
+      { issuer: "https://my-issuer.com" },
+    );
+  });
+
+  it("should cache JWKS per jwks_uri from metadata", async () => {
+    (jose.jwtVerify as any).mockResolvedValue({ payload: { sub: "user-1" } });
+
+    const config = createMockConfig("https://keycloak.example.com/realms/cache-test/certs");
+    const token1 = createTestJwt({ sub: "user-1" });
+    const token2 = createTestJwt({ sub: "user-2" });
 
     const callsBefore = (jose.createRemoteJWKSet as any).mock.calls.length;
-    await validateAccessToken(mockConfig, token1);
-    await validateAccessToken(mockConfig, token2);
+    await validateAccessToken(config, token1);
+    await validateAccessToken(config, token2);
     const callsAfter = (jose.createRemoteJWKSet as any).mock.calls.length;
 
-    // Should only create one new JWKS for the same issuer
+    // Should only create one new JWKS for the same jwks_uri
     expect(callsAfter - callsBefore).toBe(1);
   });
 });

@@ -26,6 +26,7 @@ export function getCookieNames(prefix: string): CookieNames {
     codeVerifier: `${prefix}_code_verifier`,
     tempSessionId: `${prefix}_temp_session_id`,
     authSessionId: `${prefix}_auth_session_id`,
+    oauthState: `${prefix}_oauth_state`,
   };
 }
 

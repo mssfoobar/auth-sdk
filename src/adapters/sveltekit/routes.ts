@@ -84,7 +84,7 @@ export function createAuthRoutes(config: AuthRoutesConfig) {
         }
       } else {
         cookies.set(cookieNames.codeVerifier, codeVerifier, cookieOptions);
-        cookies.set(`${config.cookie.prefix}_oauth_state`, state, cookieOptions);
+        cookies.set(cookieNames.oauthState, state, cookieOptions);
       }
       
       return json(null, {

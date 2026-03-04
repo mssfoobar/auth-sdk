@@ -41,6 +41,7 @@ const cookieNames: CookieNames = {
   codeVerifier: "t_code_verifier",
   tempSessionId: "t_temp_session_id",
   authSessionId: "t_auth_session_id",
+  oauthState: "t_oauth_state",
 };
 
 const cookieOptions: CookieSerializeOptions = {
@@ -181,7 +182,7 @@ describe("authenticate", () => {
   it("Case 3: OIDC callback with state mismatch → failure (CSRF)", async () => {
     const cookies = createMockCookies();
     cookies._store.set("t_code_verifier", "verifier-123");
-    cookies._store.set("myapp_oauth_state", "correct-state");
+    cookies._store.set("t_oauth_state", "correct-state");
     (isOidcCallback as any).mockReturnValue(true);
 
     const result = await authenticate({
@@ -191,7 +192,6 @@ describe("authenticate", () => {
       origin: "https://app.com",
       cookieNames,
       cookieOptions,
-      cookiePrefix: "myapp",
     });
 
     expect(result.success).toBe(false);
@@ -201,7 +201,7 @@ describe("authenticate", () => {
   it("Case 3: OIDC callback with matching state → proceeds", async () => {
     const cookies = createMockCookies();
     cookies._store.set("t_code_verifier", "verifier-123");
-    cookies._store.set("myapp_oauth_state", "correct-state");
+    cookies._store.set("t_oauth_state", "correct-state");
     (isOidcCallback as any).mockReturnValue(true);
     (exchangeCode as any).mockResolvedValue({
       access_token: "new-at",
@@ -216,10 +216,11 @@ describe("authenticate", () => {
       origin: "https://app.com",
       cookieNames,
       cookieOptions,
-      cookiePrefix: "myapp",
     });
 
     expect(result.success).toBe(true);
+    // State cookie should be cleaned up
+    expect(cookies._store.has("t_oauth_state")).toBe(false);
   });
 
   it("Case 4: no tokens, not callback → failure", async () => {
