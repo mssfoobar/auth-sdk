@@ -19,3 +19,45 @@ jobs:
       sync-branch: develop
       legacy-peer-deps: true
     secrets: inherit
+
+  # Safety net: publish if the reusable workflow versioned but skipped publish
+  ensure-published:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@mssfoobar"
+
+      - name: Check if current version is published
+        id: check
+        run: |
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          echo "local_version=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
+
+          PUBLISHED=$(npm view "@mssfoobar/auth-sdk@$LOCAL_VERSION" version 2>/dev/null || echo "")
+          if [ "$PUBLISHED" = "$LOCAL_VERSION" ]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "v$LOCAL_VERSION is already published — nothing to do."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "v$LOCAL_VERSION is NOT published — will publish now."
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install and build
+        if: steps.check.outputs.already_published == 'false'
+        run: npm ci --legacy-peer-deps && npm run build
+
+      - name: Publish to GitHub Packages
+        if: steps.check.outputs.already_published == 'false'
+        run: npm publish --registry=https://npm.pkg.github.com
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
